@@ -61,6 +61,7 @@ class Entry(NestedBuffer):
         0x12: 'SMU_OFF_CHIP_FW_2',
         0x13: 'DEBUG_UNLOCK',
         0x1A: 'PSP_S3_NV_DATA',
+        0x20: 'AMD_HW_IPCFG',
         0x21: 'WRAPPED_IKEK',
         0x22: 'TOKEN_UNLOCK',
         0x24: 'SEC_GASKET',
@@ -76,18 +77,35 @@ class Entry(NestedBuffer):
         0x36: 'ABL6',
         0x37: 'ABL7',
         0x3A: 'FW_PSP_WHITELIST',
+        0x3C: 'VBIOS_BTLOADER',
         # 0x40: 'FW_L2_PTR',
         0x41: 'FW_IMC',
         0x42: 'FW_GEC',
         # 0x43: 'FW_XHCI',
         0x44: 'FW_INVALID',
+        0x45: 'FW_TOS_SEC_POLICY',
         0x46: 'ANOTHER_FET',
+        0x47: 'FW_DRTM_TA',
+        0x49: 'FW_BIOS_TABLE',
         0x50: 'KEY_DATABASE',
+        0x51: 'FW_KEYDB_TOS',
+        0x52: 'FW_PSP_VERSTAGE',
+        0x53: 'FW_VERSTAGE_SIG',
+        0x54: 'RPMC_NVRAM',
+        0x55: 'FW_SPL',
+        0x5a: 'FW_MSMU',
+        0x5c: 'FW_SPIROM_CFG',
         0x5f: 'FW_PSP_SMUSCS',
         0x60: 'FW_IMC',
         0x61: 'FW_GEC',
         0x62: 'FW_XHCI',
         0x63: 'FW_INVALID',
+        0x71: 'FW_DMCUB',
+        0x73: 'FW_PSP_BOOTLOADER_AB',
+        0x76: 'RIB',
+
+        0x8c: 'FW_MPDMA_TF',
+
         0x108: 'PSP_SMU_FN_FIRMWARE',
         0x118: 'PSP_SMU_FN_FIRMWARE2',
 
@@ -127,9 +145,11 @@ class Entry(NestedBuffer):
         # todo: consolidate these constants with Directory._ENTRY_TYPES_PUBKEY
         PUBKEY_ENTRY_TYPES = [0x0, 0x9, 0xa, 0x5, 0xd, 0x43, 0x4e, 0xdead]
 
+        AMD_FW_RECOVERYAB_TYPES = [0x48, 0x4a]
+
         # Types known to have no PSP HDR
         # TODO: Find a better way to identify those entries
-        NO_HDR_ENTRY_TYPES = [0x4, 0xb, 0x21, 0x40, 0x70, 0x30062, 0x6, 0x61, 0x60,
+        NO_HDR_ENTRY_TYPES = [0x4, 0xb, 0x21, 0x4A, 0x70, 0x30062, 0x6, 0x61, 0x60,
                               0x68, 0x100060, 0x100068, 0x5f, 0x15f, 0x1a, 0x22, 0x63,
                               0x67, 0x66, 0x100066, 0x200066, 0x300066, 0x10062,
                               0x400066, 0x500066, 0x800068, 0x61, 0x200060, 0x300060,
@@ -193,7 +213,25 @@ class Entry(NestedBuffer):
                     psptool,
                     destination=destination,
                 )
-
+        elif type_ in AMD_FW_RECOVERYAB_TYPES:
+            try:
+                size = 0x20
+                new_entry = AMDRecoveryABEntry(parent_directory, parent_buffer, type_, size, offset, blob, psptool)
+                # new_entry = HeaderEntry(parent_directory, parent_buffer, type_, amdentry.rom_size, amdentry.load_addr, blob, psptool)
+                # if size == 0:
+                #     psptool.ph.print_warning(f"Entry with zero size. Type: {type_}. Dir: 0x{offset:x}")
+            except Exception as e:
+                print(e)
+                new_entry = Entry(
+                    parent_directory,
+                    parent_buffer,
+                    type_,
+                    size,
+                    offset,
+                    blob,
+                    psptool,
+                    destination=destination,
+                )
         if new_entry is None:
             # Option 3: it's a HeaderEntry (most common)
             if size == 0:
@@ -298,10 +336,13 @@ class Entry(NestedBuffer):
 
         try:
             self._parse()
-        except (struct.error, AssertionError):
-            self.psptool.ph.print_warning(f"Couldn't parse entry at: 0x{self.get_address():x}. "
-                                          f"Type: {self.get_readable_type()}. Size 0x{len(self):x}")
+        except Exception as err:
+            print("[ERR] {}:{} {} {}\n".format(err.__traceback__.tb_frame.f_globals['__file__'], err.__traceback__.tb_lineno, repr(err)))
             raise Entry.ParseError()
+        # except (struct.error, AssertionError):
+        #     self.psptool.ph.print_warning(f"Couldn't parse entry at: 0x{self.get_address():x}. "
+        #                                   f"Type: {self.get_readable_type()}. Size 0x{len(self):x}")
+        #     raise Entry.ParseError()
 
     @property
     def signed(self) -> bool:
@@ -366,6 +407,14 @@ class Entry(NestedBuffer):
         for directory in self.references:
             directory.update_entry_fields(self, self.type, self.buffer_size, self.buffer_offset)
 
+class AMDRecoveryABEntry(Entry):
+    HEADER_LEN = 0x20
+
+    def _parse(self):
+        self.header = NestedBuffer(self, AMDRecoveryABEntry.HEADER_LEN)
+        self.magic = self.header[0:4]
+        self.load_addr = struct.unpack('<I', self.header[0x10:0x14])[0]
+        self.rom_size = struct.unpack('>I', self.header[0x14:0x18])[0]
 
 class KeyStoreEntry(Entry):
 
@@ -735,7 +784,7 @@ class HeaderEntry(Entry):
     HEADER_LEN = 0x100
 
     def _parse(self):
-        self.header = NestedBuffer(self, HeaderEntry.HEADER_LEN)
+        self.header = NestedBuffer(self.parent_buffer, HeaderEntry.HEADER_LEN, self.parent_directory.buffer_offset + self.buffer_offset)
 
         # Will be set by the CertificateTree created after the blob
         self.signed_entity = None
@@ -782,6 +831,9 @@ class HeaderEntry(Entry):
         self._sha256_checksum = NestedBuffer(self, 0x20, 0xd0)
         if self.has_sha256_checksum:
             self.sha256_verified = self.verify_sha256()
+
+        if self.load_addr in [0, 0xFFFFFFFF]:
+            self.load_addr = self.buffer_offset
 
         return
 
@@ -867,7 +919,7 @@ class HeaderEntry(Entry):
     @property
     def signed(self) -> bool:
         signed = int.from_bytes(self._signed.get_bytes(), 'little')
-        assert signed in {0, 1, 0xffff0000}, f'did not expect signed to be 0x{signed:x}'
+        assert signed in {0, 1, 0xffff0000, 0xffffffff}, f'did not expect signed to be 0x{signed:x}'
         return signed != 0
 
     # @property
@@ -901,7 +953,8 @@ class HeaderEntry(Entry):
         self.verify_sha256()
 
     def get_readable_version(self):
-        return '.'.join([hex(b)[2:].upper() for b in self.version])
+        return '.'.join([str(b) for b in self.version])
+        # return '.'.join([hex(b)[2:].upper() for b in self.version])
 
     def get_ikek_md5sum(self) -> bytes:
         ikek = self.parent_buffer.get_entries_by_type(0x21)[0]
@@ -980,9 +1033,13 @@ class HeaderEntry(Entry):
 
     def md5(self):
         m = md5()
+        md5sum = ""
         try:
-            m.update(self.body.get_bytes())
+            if self.buffer_size <= 0x1000000:
+                m.update(self.body.get_bytes())
+                md5sum = m.hexdigest()
         except:
             self.psptool.ph.print_warning(f"Get bytes failed at entry: 0x{self.get_address():x} type: {self.get_readable_type()} size: 0x{self.buffer_size:x}")
-        return m.hexdigest()
+        finally:
+            return md5sum
 

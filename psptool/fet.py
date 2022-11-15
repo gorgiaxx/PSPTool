@@ -14,6 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from psptool.entry import AMDRecoveryABEntry
 from .utils import NestedBuffer
 from .directory import Directory
 
@@ -103,6 +104,16 @@ class Fet(NestedBuffer):
                     self._create_directory(combo_address, dir_magic, combo_zen_gen)
             elif dir_magic == b'$PSP':
                 self._create_directory(rom_addr, dir_magic, zen_generation='unknown')
+            elif dir_magic == b')\xedX/':
+                load_addr = 0
+                rom_size = 256
+                for rom_entry in self.rom.unique_entries:
+                    if isinstance(rom_entry, AMDRecoveryABEntry):
+                        load_addr = rom_entry.load_addr
+                        rom_size = rom_entry.rom_size
+                # self.rom.update_entry_fields(self, self.type, rom_size, load_addr)
+                dir_ = Directory(self.rom, load_addr, 'PSP', self.psptool, zen_generation='unknown', rom_size=rom_size)
+                self.directories.append(dir_)
             else:
                 self._create_directory(rom_addr, dir_magic, zen_generation='unknown')
                 pass
